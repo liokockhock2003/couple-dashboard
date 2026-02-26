@@ -1,14 +1,10 @@
 "use client"
 
-import {
-    onAuthStateChanged, getIdToken
-} from "firebase/auth"
-import {
-    doc,
-    getDoc,
-} from "firebase/firestore"
-import { auth, db } from "@/lib/firebase"
-import { createContext, useEffect, useState } from "react"
+import { createContext, useContext, useEffect, useState } from "react"
+import { onAuthStateChanged, getIdToken } from "firebase/auth"
+import { auth } from "@/lib/firebase"
+import { db } from "@/lib/firebase"
+import { doc, getDoc } from "firebase/firestore"
 
 interface AppUser {
     uid: string
@@ -33,20 +29,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [loading, setLoading] = useState(true)
     const [firebaseUid, setFirebaseUid] = useState<string | null>(null)
 
-    // Re-reads the Firestore user doc and updates context state.
-    // Call this after any operation that changes the user doc (e.g. connecting a partner).
     const refreshUser = async () => {
         if (!firebaseUid) return
         const snap = await getDoc(doc(db, "users", firebaseUid))
         if (snap.exists()) {
             const data = snap.data()
-            setUser((prev) => prev ? {
-                ...prev,
+            // ✅ Fix 2 — actually update the user state
+            setUser({
+                uid: firebaseUid,
                 coupleId: data.coupleId ?? null,
-                displayName: data.displayName ?? prev.displayName,
-                email: data.email ?? prev.email,
-                photoURL: data.photoURL ?? prev.photoURL,
-            } : null)
+                displayName: data.displayName ?? null,
+                email: data.email ?? null,
+                photoURL: data.photoURL ?? null,
+            })
         }
     }
 
@@ -61,45 +56,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
             setFirebaseUid(firebaseUser.uid)
 
-            const docRef = doc(db, "users", firebaseUser.uid)
-            const snap = await getDoc(docRef)
-
-            if (!snap.exists()) {
-                // First-time login → create user
+            try {
+                // ✅ Fix 1 — get the ID token and send it in the Authorization header
                 const idToken = await getIdToken(firebaseUser)
+
                 await fetch("/api/createUser", {
                     method: "POST",
                     headers: {
                         "Content-Type": "application/json",
-                        "Authorization": `Bearer ${idToken}`,   // ← add this
+                        "Authorization": `Bearer ${idToken}`,
                     },
                     body: JSON.stringify({
-                        uid: firebaseUser.uid,
                         displayName: firebaseUser.displayName,
                         email: firebaseUser.email,
                         photoURL: firebaseUser.photoURL,
                     }),
                 })
 
-                setUser({
-                    uid: firebaseUser.uid,
-                    coupleId: null,
-                    displayName: firebaseUser.displayName,
-                    email: firebaseUser.email,
-                    photoURL: firebaseUser.photoURL,
-                })
-            } else {
-                const data = snap.data()
-                setUser({
-                    uid: firebaseUser.uid,
-                    coupleId: data.coupleId ?? null,
-                    displayName: data.displayName ?? firebaseUser.displayName,
-                    email: data.email ?? firebaseUser.email,
-                    photoURL: data.photoURL ?? firebaseUser.photoURL,
-                })
+                // Read the Firestore doc to get coupleId and other stored fields
+                const snap = await getDoc(doc(db, "users", firebaseUser.uid))
+                if (snap.exists()) {
+                    const data = snap.data()
+                    setUser({
+                        uid: firebaseUser.uid,
+                        coupleId: data.coupleId ?? null,
+                        displayName: data.displayName ?? null,
+                        email: data.email ?? null,
+                        photoURL: data.photoURL ?? null,
+                    })
+                }
+            } catch (err) {
+                console.error("AuthContext error:", err)
+            } finally {
+                setLoading(false)
             }
-
-            setLoading(false)
         })
 
         return () => unsubscribe()
